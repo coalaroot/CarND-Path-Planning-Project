@@ -10,6 +10,10 @@
 #include "json.hpp"
 #include "spline.h"
 
+#define DRIVE 0
+#define FOLLOW_FRONT 1
+#define SPEED_LIMIT 49.0
+
 using namespace std;
 
 // for convenience
@@ -33,6 +37,10 @@ string hasData(string s) {
     return s.substr(b1, b2 - b1 + 2);
   }
   return "";
+}
+
+double speed(double vx, double vy) {
+  return sqrt((vx*vx) + (vy*vy));
 }
 
 double distance(double x1, double y1, double x2, double y2)
@@ -227,7 +235,7 @@ int main() {
           	double car_d = j[1]["d"];
           	double car_yaw = j[1]["yaw"];
           	double car_speed = j[1]["speed"];
-            cout << "car_yaw = " << car_yaw << endl;
+            // cout << "car_d = " << car_d << " car_s = " << car_s << endl;
 
           	// Previous path data given to the Planner
           	auto previous_path_x = j[1]["previous_path_x"];
@@ -236,117 +244,140 @@ int main() {
           	double end_path_s = j[1]["end_path_s"];
           	double end_path_d = j[1]["end_path_d"];
 
-          	// Sensor Fusion Data, a list of all other cars on the same side of the road.
+          	// Sensor Fusion Data, a list of all other cars on the right side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
+
+            // cout << sensor_fusion << endl << endl;
 
           	json msgJson;
 
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
-
-          	// TODO: Define a path
+            
             int lane = 1;
             int d_lane = 2 + (4 * lane);
-            // double desired_speed = 50; // mph
-            // double car_yaw_rag = deg2rad(car_yaw);
-            cout << "car_s " << car_s << endl;
+            double desired_speed = SPEED_LIMIT;
+            double car_front_speed = desired_speed;
+            int state = DRIVE;
 
-            // Points to spline
-            int n_pts = 3; // from future path
+            if (state == DRIVE) {
+              for (auto a : sensor_fusion) {
+                  double id = a[0];
+                  double x = a[1];
+                  double y = a[2];
+                  double vx = a[3];
+                  double vy = a[4];
+                  double s = a[5];
+                  double d = a[6];
+                  if (abs(d_lane - d) <= 2) { // Cars in the same lane
+                      if (s - car_s < 10) { // Check if they are less than 10m
+                        state = FOLLOW_FRONT;
+                        // cout << "FOLLOW_FRONT" << endl;
+                        double tmp_speed = speed(vx, vy);
+                        if (tmp_speed < SPEED_LIMIT)
+                          car_front_speed = tmp_speed;
+                        break;
+                      }
+                  }
+              }
+            }
+
+            if (state == FOLLOW_FRONT) {
+                desired_speed = car_front_speed;
+            } else {
+                desired_speed = SPEED_LIMIT;
+            }
+            
+            int prev_size = previous_path_x.size();
+
+            double ref_x = car_x;
+            double ref_y = car_y;
+            double ref_yaw = deg2rad(car_yaw);
+
+            // Using previous path points to spline
             vector<double> to_splinex;
             vector<double> to_spliney;
-            tk::spline s;
-            cout << "3" << endl;
-
-            // Add now and prev coord if exist
-            // int prev_size = previous_path_x.size();
-            // if (prev_size > 0) {
-            //     to_splinex.push_back(previous_path_x[prev_size - 1]);
-            //     to_spliney.push_back(previous_path_y[prev_size - 1]);   
-            // } else {
-            //     double prev_car_x = car_x - cos(car_yaw_rag);
-            //     double prev_car_y = car_y - sin(car_yaw_rag);
-            //     to_splinex.push_back(prev_car_x);
-            //     to_spliney.push_back(prev_car_y);
-            // }
-
-            // to_splinex.push_back(car_x);
-            // to_spliney.push_back(car_y);
-
-            // Generate 3 points from future using frenet
-            // for (int i = 0; i < n_pts; i++) {
-            //     double inc = 30;
-            //     vector<double> next_pt = getXY(car_s + (inc * (i + 1)), d_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-
-            //     to_splinex.push_back(next_pt[0]);
-            //     to_spliney.push_back(next_pt[1]);
-            // }
-
-            // To car coordinates
-            // for (int i = 0; i < to_splinex.size(); i++) {
-            //     double sx = to_splinex[i] - car_x;
-            //     double sy = to_spliney[i] - car_y;
+            if (prev_size < 2) {
+                double prev_car_x = car_x - cos(car_yaw);
+                double prev_car_y = car_y - sin(car_yaw);
                 
-            //     to_splinex[i] = (sx * cos(0 - car_yaw) - (sy * sin(0 - car_yaw)));
-            //     to_spliney[i] = (sx * sin(0 - car_yaw) + (sy * cos(0 - car_yaw)));
-            // }
-            
-            // s.set_points(to_splinex, to_spliney);
+                to_splinex.push_back(prev_car_x);
+                to_spliney.push_back(prev_car_y);
 
-            // double end_x = 30;
-            // double end_y = s(end_x);
+                to_splinex.push_back(car_x);
+                to_spliney.push_back(car_y);
+            } else {
+                ref_x = previous_path_x[prev_size - 1];
+                ref_y = previous_path_y[prev_size - 1];
 
-            // double est = sqrt((end_x*end_x) + (end_y*end_y));
-            // double spacing_pts = (est/(.02 * desired_speed / 2.2369))
-            double desired_speed = 22.352; // = 50/2.2369;
-            double spacing_pts = desired_speed * .02;
-            double d = 6;
-            vector<double > splinex, spliney;
-            for (int i = 0; i <= 50; i++) {
-                if (i % 10 == 0) {
-                    vector<double> tmp = getXY(car_s + (spacing_pts * i), d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                double ref_x_prev = previous_path_x[prev_size - 2];
+                double ref_y_prev = previous_path_y[prev_size - 2];
+                ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
 
-                    double sx = tmp[0] - car_x;
-                    double sy = tmp[1] - car_y;
-                    
-                    tmp[0] = (sx * cos(0 - car_yaw) - (sy * sin(0 - car_yaw)));
-                    tmp[1] = (sx * sin(0 - car_yaw) + (sy * cos(0 - car_yaw)));
-                    
-                    splinex.push_back(tmp[0]);
-                    spliney.push_back(tmp[1]);
-                }
+                to_splinex.push_back(ref_x_prev);
+                to_spliney.push_back(ref_y_prev);
+                
+                to_splinex.push_back(ref_x);
+                to_spliney.push_back(ref_y);
             }
+            // End
 
-            if (splinex[0] < 0.0) {
-                for (int i = 0; i < splinex.size(); i++) {
-                    splinex[i] -= splinex[0];
-                }
+            // Create 3 new points to spline
+            for (int i = 1; i <= 3; i++) {
+                vector<double> next_wp = getXY(car_s + (i * 30), d_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                to_splinex.push_back(next_wp[0]);
+                to_spliney.push_back(next_wp[1]);
             }
-            for (int i = 0; i < splinex.size(); i++) {
-                cout << splinex[i] << " " << spliney[i] << endl;
+            // End
+
+            // Shifting spline points to cars coordinate so that first point is 0,0 and yaw = 0
+            for (int i = 0; i < to_splinex.size(); i++) {
+                double shift_x = to_splinex[i] - ref_x;
+                double shift_y = to_spliney[i] - ref_y;
+                
+                to_splinex[i] = (shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw));
+                to_spliney[i] = (shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw));
             }
-            cout << endl;
-            
-            s.set_points(splinex, spliney);
+            // End
 
-            for (int i = 0; i < 50; i++) {
-                double x = spacing_pts * i;
-                double y = s(x);
+            // Spline
+            tk::spline s;
+            s.set_points(to_splinex, to_spliney);
+            // End
 
-                double tmpx = x;
-                double tmpy = y;
-
-                x = ((tmpx * cos(car_yaw)) - (tmpy * sin(car_yaw)));
-                y = ((tmpx * sin(car_yaw)) + (tmpy * cos(car_yaw)));
-
-                x += car_x;
-                y += car_y;
-
-                next_x_vals.push_back(x);
-                next_y_vals.push_back(y);
+            // Adding previous path
+            for (int i = 0; i < previous_path_x.size(); i++) {
+                next_x_vals.push_back(previous_path_x[i]);
+                next_y_vals.push_back(previous_path_y[i]);
             }
+            // End
 
-            // END
+            double target_x = 30.0;
+            double target_y = s(target_x);
+            double target_dist = sqrt((target_x*target_x) + (target_y*target_y));
+            double x_add_on = 0;
+
+            // Adding rest of the points
+            for (int i = 1; i < 50 - previous_path_x.size(); i++) {
+                double N = (target_dist/(.02 * desired_speed / 2.24));
+                double x_point = x_add_on + (target_x/N);
+                double y_point = s(x_point);
+
+                x_add_on = x_point;
+
+                double x_ref = x_point;
+                double y_ref = y_point;
+                
+                x_point = (x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw));
+                y_point = (x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw));
+
+                x_point += ref_x;
+                y_point += ref_y;
+              
+                next_x_vals.push_back(x_point);
+                next_y_vals.push_back(y_point);
+            }
+            // End
 
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
@@ -354,7 +385,6 @@ int main() {
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-          	//this_thread::sleep_for(chrono::milliseconds(1000));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
